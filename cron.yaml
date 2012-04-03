@@ -1,0 +1,6 @@
+cron:
+- description: daily summary job
+  url: /getdomains
+  schedule: every day 11:40
+  target: crawler 
+

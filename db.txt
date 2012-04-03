@@ -1,0 +1,42 @@
+CREATE TABLE domaininfo
+(
+domen varchar(255) not null,
+dataValidnost date,
+dataRegistracija date,
+registrantIme varchar(255),
+registrantAdresa varchar(255),
+registrantEDB varchar(255),
+registrantTel varchar(255),
+adminKontaktIme varchar(255),
+adminKontaktEmail varchar(255),
+adminKontaktTel varchar(255),
+techKontaktIme varchar(255),
+techKontaktEmail varchar(255),
+techKontaktTel varchar(255),
+dns1 varchar(255),
+dns2 varchar(255),
+date datetime not null,
+version integer not null,
+status char(1) not null,
+primary key (Domen,Version)
+);
+
+class DomainInfo(db.Model):
+  domen = db.StringProperty(required=True)
+  data_validnost = db.DateProperty()
+  data_registracija = db.DateProperty()
+  registrant_ime = db.StringProperty()
+  registrant_adresa = db.StringProperty()
+  registrant_EDB = db.StringProperty()
+  registrant_tel = db.StringProperty()
+  admin_kontakt_ime = db.StringProperty()
+  admin_kontakt_email = db.StringProperty()
+  admin_kontakt_tel = db.StringProperty()
+  tech_kontakt_ime = db.StringProperty()
+  tech_kontakt_email = db.StringProperty()
+  tech_kontakt_tel = db.StringProperty()
+  dns1 = db.StringProperty()
+  dns2 = db.StringProperty()
+  date = db.DateTimeProperty
+  version = db.IntegerProperty(required=True)
+  status = db.BooleanProperty()

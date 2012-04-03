@@ -1,43 +1,71 @@
-#!/usr/bin/env python2.5
+#!/usr/bin/env python2.7
 # -*- coding: utf-8 -*-
 
-import datetime
-import sqlite3
+#import sqlite3 #GAEquirk
+import re
 import pickle
-import urllib2
-import BeautifulSoup
-import codecs
-import cgi
+import logging
+import datetime
+import urllib2,urllib,pickle
+from BeautifulSoup import BeautifulSoup
+from google.appengine.api import rdbms
+from google.appengine.api import urlfetch
+from google.appengine.api import urlfetch_errors
+from google.appengine.runtime import apiproxy_errors 
 
-format_na_datum="%Y-%m-%d"# %H:%M:%S"
+
+format_na_datum="%d-%m-%Y"
 deneska = datetime.datetime.now().date()
+_INSTANCE_NAME = 'mkdomainssql:mkdomainsql'
+gae = True;
 
 def stranici():
-    """Листата со линкови од http://dns.marnet.net.mk/registar.php"""
-    fajl = open('/home/glisha/webapps/nginx_domejnotmk/domejnotmk/soberipodatoci/domejni_stranici.pckl','rb')
-    stranici = pickle.load(fajl)
-    fajl.close()
-    return stranici
+    """Букви на http://dns.marnet.net.mk/registar.php"""
+    bukvi = ['NUM','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z']
+
+    url = 'http://dns.marnet.net.mk/registar.php'
+
+    linkovi = []
+    for bukva in bukvi:
+        logging.info(u"Proveruvam Bukva %s" % bukva)
+        bukva = urllib.urlencode({'bukva':bukva})
+        req = urllib2.Request(url,bukva)
+        res = urllib2.urlopen(req)
+
+        stranica = res.read()
+
+        soup = BeautifulSoup(stranica)
+        rawlinkovi = soup.findChildren('a',{'class':'do'})
+        
+        for link in rawlinkovi:
+            if link['href'].find('del=') <> -1:
+                linkovi.append(link['href'])
+
+    return linkovi
 
 def zemi_domejni(stranici):
     """Ги зима домејните од Марнет. stranici треба да е ажурна
     листа на страници од главната страница на Марнет."""
 
     #ako deneska sum sobral ne probuvaj pak
-    conn = sqlite3.connect("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/soberipodatoci/domejni.sqlite3")
+    if gae:
+        conn = rdbms.connect(instance=_INSTANCE_NAME, database='domaininfo')
+    else:
+        pass
+        #conn = sqlite3.connect("db/domaininfo.sqlite3") #GAEquirk
     c = conn.cursor()
-    c.execute('select count(*) from domejni where datum=?',(deneska,))
+    c.execute('select count(*) from domaininfo where date=%s',(deneska,))
     if c.fetchone()[0]<>0:
         return []
 
     domejni = []
     for link in stranici:
-        #print u"Го обработувам %s" % link
+        logging.info(u"Sobiram %s" % link)
 
         req = urllib2.Request(u'http://dns.marnet.net.mk/' + link)
         res = urllib2.urlopen(req)
         strana = res.read()
-        soup = BeautifulSoup.BeautifulSoup(strana)
+        soup = BeautifulSoup(strana)
 
         domejn_linkovi = soup.findChildren('a',{'class':'do'})
 
@@ -47,6 +75,69 @@ def zemi_domejni(stranici):
 
     return domejni
     
+    
+def dodaj_domejn(domejn,conn):
+    
+    logging.info(u"Dodavam %s" % domejn)
+    url = u'http://dns.marnet.net.mk/registar.php?dom=' + domejn
+    
+    if gae:
+        result = urlfetch.fetch(url, deadline=60)
+        strana = result.content
+    else:
+        req = urllib2.Request(url)
+        res = urllib2.urlopen(req)
+        strana = res.read()
+    
+    soup = BeautifulSoup(strana)
+    regstring = """ .mk """  # Greska vo sistemot na marnet
+    if regstring in strana: 
+        return               # TODO: vidi dali ja ima vo db i signaliziraj brisenje
+    c = conn.cursor()    
+    p1 = soup('table')[6].blockquote.text[-10:]
+    
+    if p1[6:].isdigit():
+        p1 = p1[6:] + '-' + p1[3:6] + p1[0:2]
+    else:
+        p1 = '2014-12-31'
+    p2 = soup('td')[36].text
+    if p2[6:].isdigit():
+        p2 = p2[6:] + '-' + p2[3:6] + p2[0:2]
+    else:
+        p2 = '2003-05-01'
+    p3 = soup('td')[38].text
+    p4 = soup('td')[40].text
+    p5 = soup('td')[42].text
+    p6 = soup('td')[44].text
+    p7 = soup('td')[49].text
+    p8 = soup('td')[51].text
+    p9 = soup('td')[53].text
+    p10 = soup('td')[56].text
+    p11 = soup('td')[58].text
+    p12 = soup('td')[60].text
+    p13 = soup('td')[65].text
+    p14 = soup('td')[67].text
+    p15 = datetime.datetime.now()
+    p16 = 1
+    p17 = 'Y'
+    promena = False;
+    c.execute("""select * from domaininfo where domen=%s and status='Y'""",(domejn,))
+    row = c.fetchone();
+    if row is None: 
+        logging.info(u"Nov Domen")
+        promena = True;
+        p16 = 1
+    elif (row[0],row[1].isoformat(), row[2].isoformat(), row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], row[14]) != (domejn,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14):
+        logging.info("Razlichni se ")
+        promena = True
+        c.execute("""select version from domaininfo where domen=%s and status='Y'""",(domejn,))
+        p16 = c.fetchone()[0]+1;
+        c.execute("""update domaininfo set status='N' where domen=%s and status = 'Y'""",(domejn,))
+    if promena == True: 
+        c.execute('insert into domaininfo values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)', (domejn,p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16,p17))
+        conn.commit()
+    c.close()
+
 
 def sochuvaj_domejni(domejni):
     """Ги сочувува домејните во база"""
@@ -54,149 +145,34 @@ def sochuvaj_domejni(domejni):
     if not domejni:
         return False
 
-    conn = sqlite3.connect("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/soberipodatoci/domejni.sqlite3")
-    c = conn.cursor()
-
+    if gae:
+        conn = rdbms.connect(instance=_INSTANCE_NAME, database='domaininfo')
+    else:
+        pass
+        #conn = sqlite3.connect("db/domaininfo.sqlite3") #GAEquirk
+        
     for domejn in domejni:
-        c.execute("insert into domejni values (?,?)",(deneska,domejn))
-
-    conn.commit()
-    c.close()
-
-def novi_domejni(datumstar,datumnov):
-    """Кои домејни ги има во datumnov а ги нема во datumstar."""
-
-    conn = sqlite3.connect("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/soberipodatoci/domejni.sqlite3")
-    c = conn.cursor()
-    
-    c.execute("""
-            select 
-                datum,domejn 
-            from 
-                domejni 
-            where 
-                datum=? and 
-                domejn not in (select domejn from domejni where datum=?)""",
-            (datumnov.strftime("%Y-%m-%d"),datumstar.strftime("%Y-%m-%d")))
-
-    a = [(novdomejn[0],novdomejn[1]) for novdomejn in c]
-
-    c.execute("select count(*) from novidomejni where datum=?",(datumstar.strftime("%Y-%m-%d"),))
-    if c.fetchone()[0]==0:
-        c.execute("insert into novidomejni values (?,?)",(datumstar.strftime("%Y-%m-%d"),len(a)))
-        conn.commit()
-
-    c.close()
-    return a
-
-def format_date(dt):
-    """convert a datetime into an RFC 822 formatted date
-
-        Input date must be in GMT.
-    """
-    # Looks like:
-    #   Sat, 07 Sep 2002 00:00:01 GMT
-    # Can't use strftime because that's locale dependent
-    #
-    # Isn't there a standard way to do this for Python?  The
-    # rfc822 and email.Utils modules assume a timestamp.  The
-    # following is based on the rfc822 module.
-    return "%s, %02d %s %04d %02d:%02d:%02d GMT" % (
-                ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][dt.weekday()],
-                dt.day,
-                ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][dt.month-1],
-                dt.year, dt.hour, dt.minute, dt.second)
-
-def output_html(novidomejni):
-    if not novidomejni:
-        return
-
-    import grafici
-    podatum_grafik = grafici.novidomejni_grafik()
-    potip_grafik = grafici.tipovidomejn_grafik()
-
-    fajl = codecs.open("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/public_html/index.html","w","utf-8")
-    fajl.write(u"""<html>
-        <head>
-        <title>Ново регистрирани домејни денеска</title>
-        <meta http-equiv="content-type" content="text/html; charset=utf-8">
-        <meta name="Author" content="Georgi Stanojevski <http://isengard.unet.com.mk/~georgi/ueb/>">
-        <link rel="shortcut icon" href="favicon.ico" />
-        <link rel="alternate" type="application/rss+xml" title="Најнови домејни" href="/novidomejni.xml" />
-        <style>
-            body { 
-            font-family: sans-serif;
-            }
-        </style>
-    </head><body>
-    <p>&nbsp;</p>
-    <p><b>Претплати се на <a href='/novidomejni.xml'>RSS каналот</a> за веднаш да дознаваш кои се новo регистрирани .mk домејни.</b></p>
-    <p>Ново регистрирани домејни:</p>""")
-
-    fajl.write(u"<ul>")
-    for element in novidomejni:
-        fajl.write(u"<li><a title='Опис во Марнет' href='http://dns.marnet.net.mk/registar.php?dom=%s'>%s</a> (<a href='http://www.%s' title='Кон сајтот'><img border=0 src='/external.png' /></a>)</li>" % (element[1],element[1],element[1]))
-
-    fajl.write(u"</ul>")
-
-    fajl.write(u'<center><img src="%s" alt="Novi domejni poslednite 30 denovi" /></center><br /><br /><br />' % podatum_grafik)
-    fajl.write(u'<center><img src="%s" alt="Registrirani .mk domeni po tip" /></center><br /><hr />' % potip_grafik)
-    fajl.write(u'<p>Архивата е <a href="/podatum/">тука</a>, скриптите со кои се генерира <a href="/novimkdomejni.tar.gz">тука</a>, останати работи на <a href="http://isengard.unet.com.mk/~georgi/ueb/">http://isengard.unet.com.mk/~georgi/ueb/</a></p></body></html>')
-
-
-def output_rss(novidomejni):
-    """RSS со новите. Ако нема нови не го чепка старото рсс."""
-    if not novidomejni:
-        return
-
-
-    fajl = codecs.open("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/public_html/novidomejni.xml","w","utf-8")
-    fajl.write(u"""<?xml version="1.0" encoding="utf-8"?>
-                        <rss version="2.0">
-                        <channel>
-                        <title>Нови .мк домејни</title>
-                        <link>http://domejn.ot.mk</link>
-                        <description>Листа на ново регистрираните домејни денеска.</description>
-                        <language>mk</language>
-                        <image>
-                        <title>Нови .мк домејни</title>
-                        <url>mk.jpg</url>
-                        <link>http://domejn.ot.mk</link>
-                        </image>\n""")
-
-    for element in novidomejni:
-        fajl.write("""<item>
-                            <title>%s</title>
-                            <link>http://dns.marnet.net.mk/registar.php?dom=%s</link>
-                            <description>&lt;a href=&quot;http://www.%s&quot;&gt;%s&lt;/&gt;</description>
-                            <pubDate>%s</pubDate>
-                            <guid>http://dns.marnet.net.mk/registar.php?dom=%s</guid>
-                            </item>""" % 
-                (element[1],
-                element[1],
-                element[1],
-                element[1],
-                format_date(datetime.datetime.strptime(element[0],'%Y-%m-%d')),
-                element[1]))
-
-    fajl.write("</channel></rss>")
-    fajl.close()
-
-
+        i = 0
+        while True:
+            try:
+                i = i + 1
+                dodaj_domejn(domejn,conn)
+                break
+            except (urllib2.URLError, apiproxy_errors.DeadlineExceededError, urlfetch_errors.DeadlineExceededError, urlfetch_errors.DownloadError, urlfetch_errors.Error):
+                logging.error('Internet greshka, probuvam pak: ' + domejn)
+                if i == 3: break
+        
 
 if __name__=="__main__":
+    logging.info('Pocnuvam')
     stranici = stranici()
     domejni = zemi_domejni(stranici)
-
+    
+    if domejni == []:
+        fajl = open('domejni.pckl','rb')
+        domejni = pickle.load(fajl)
+        fajl.close()
+    
     if domejni:
+        logging.info('Snimam domeni')
         sochuvaj_domejni(domejni)
-
-        datumstar = datetime.datetime.now().date() - datetime.timedelta(1)
-        datumnov = datetime.datetime.now().date()
-        novi = novi_domejni(datumstar,datumnov)
-        if novi:
-            import shutil
-            shutil.copyfile("/home/glisha/webapps/nginx_domejnotmk/domejnotmk/public_html/index.html","/home/glisha/webapps/nginx_domejnotmk/domejnotmk/public_html/podatum/%s.html" % datumstar.strftime("%Y%m%d"))
-            output_rss(novi)
-            output_html(novi)
